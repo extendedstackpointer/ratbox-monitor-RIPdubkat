@@ -57,15 +57,15 @@ def write_sock(strfmsg):
 
 
 # send a CTCP response
-def ctcp_reply(target, msg):
+def ctcp_reply(target, cmd, data):
     write_sock(
-        str.format("PRIVMSG %s :\x01%s\x01") % (target, data)
+        str.format("PRIVMSG %s :\x01%s\x01 %s") % (target, cmd, data)
     )
     return True
 
 
 # send a privmsg
-def irc_privmsg(target, msg):
+def irc_privmsg(target, data):
     write_sock(
         str.format("PRIVMSG %s :%s") % (target, data)
     )
@@ -85,20 +85,15 @@ def irc_register(nick, username, extra1, extra2, gecos ):
 # basic irc handlers
 # --------------------------------------------------------------------------------
 
-def irc_quit(sq, quitmsg):
-    if not is_connected:
-        return False
-    sq.put(str.format("QUIT %s\n" % quitmsg))
-    global selfquit
-    selfquit = True
-    return True
 
 def generic_notice(sq, parsedmsg):
     return True
 
+
 def hndl_serverping(sq, parsedmsg):
     write_sock(str.format("PONG %s\r\n" % parsedmsg[1].lstrip(':')))
     return True
+
 
 # end of MOTD a.k.a. succesfully connected to irc and registered
 def hndl_376(sq, parsedmsg):
@@ -108,6 +103,7 @@ def hndl_376(sq, parsedmsg):
     is_connected=True
     write_sock(str.format("MODE %s +iwg\r\n" % parsedmsg[2]))
     return True
+
 
 # there was a quit message but we didn't issue a QUIT command to the server
 def hndl_died(sq, parsedmsg):
@@ -124,6 +120,7 @@ def hndl_died(sq, parsedmsg):
 
 # cmd handlers for privmsg
 # --------------------------------------------------------------------------------
+
 
 def cmd_quit(sender, target, msg):
     selfquit = True

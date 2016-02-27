@@ -51,7 +51,7 @@ def fast_dumpq(sk, sq):
         if amsg == "died.":
             del sq
             sk.close()
-
+            return
         send_now(sk, amsg)
         del amsg
     return
@@ -101,14 +101,18 @@ if __name__ == "__main__":
     irchandlers.is_connected = True
     irchandlers.init(send_q)
 
-    # fix this to dervive values from config file
+    # fix this to derive values from config file
     irchandlers.irc_register('justatest','esp', '0','0','derp')
+
     rawbuf = bytes()
     while True:
 
         if not send_q.empty():
             # send_q.put(None)
             fast_dumpq(s, send_q)
+            if not s:
+                del send_q
+                break
 
         try:
             if len(rawbuf) > 0:
@@ -124,13 +128,13 @@ if __name__ == "__main__":
                 irchandlers.is_connected=False
                 sys.exit(0)
 
-        # fix issues with newline versus socket recv()
+        # fix issues with newline versus socket recv() buffer
         cleanlines, left = fixlines(rawbuf)
 
         splitbuf = cleanlines.split('\n')
         for i in range( len(splitbuf) ):
             splitbuf[i] = splitbuf[i].strip('\r')
-            irchandlers.irc_dispatch( send_q, splitbuf[i] )
+            irchandlers.irc_dispatch(send_q, splitbuf[i])
 
         # let recv() append to the remainder of the socket buffer
         rawbuf = left
