@@ -1,0 +1,10 @@
+* child process messaging protocol
+* IRC/RFC message map
+* initial IRC msg handlers
+* dispatch for raw IRC intake
+* dispatch for commands
+* async resolver
+* stats queries and storage
+* PRIVMSG cmd interface
+* remote update
+* SSL client certificate authentication
