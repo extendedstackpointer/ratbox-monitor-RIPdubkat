@@ -48,7 +48,8 @@ def fast_dumpq(sk, sq):
             break
 
         # gracefully handle exit
-        if amsg == "died.":
+        if amsg.decode('utf-8') == "died.":
+            print("got died msg.", file=sys.stderr)
             del sq
             sk.close()
             return
@@ -102,7 +103,7 @@ if __name__ == "__main__":
     irchandlers.init(send_q)
 
     # fix this to derive values from config file
-    irchandlers.irc_register('justatest','esp', '0','0','derp')
+    irchandlers.irc_register(conf['IRCNICK'],conf['IRCUSER'], '0','0',conf['IRCNAME'])
 
     rawbuf = bytes()
     while True:

@@ -114,6 +114,7 @@ def hndl_died(sq, parsedmsg):
         write_sock( "died." )
     else:
         # adjust data sets for a client quit
+        is_connected = False
         return True
     is_connected = False
     return True
@@ -124,8 +125,9 @@ def hndl_died(sq, parsedmsg):
 
 def cmd_quit(sender, target, msg):
     selfquit = True
-    if len(msg) == 2:
-        write_sock( str.format("QUIT :%s\r\n" % msg[1]) )
+    msg = msg.split(maxsplit=4)
+    if len(msg) == 5:
+        write_sock( str.format("QUIT :%s\r\n" % msg[4]) )
     else:
         write_sock( str.format("QUIT :killroy was here!\r\n"))
     return True
@@ -173,10 +175,10 @@ def cmd_dispatch(rawmsg):
     parsedpm = rawmsg.split(maxsplit=4)
     sender = re.split("\!|\@", parsedpm[0].lstrip(':'))
     target = parsedpm[2]
-    realmsg = parsedpm[3].lstrip(':').split(maxsplit=2)
+    realmsg = parsedpm[3].lstrip(':').split(maxsplit=1)
     if realmsg[0] in cmd_dict:
         for i in range( len(cmd_dict[realmsg[0]]) ):
-            cmd_dict[realmsg[0]][i]( sender, target, realmsg )
+            cmd_dict[realmsg[0]][i]( sender, target, rawmsg )
     return True
 
 # add a handler to the function list for a given irc message
@@ -208,6 +210,7 @@ def init(sq):
     # server requests such as PING
     add_irc_handler('SERVER_REQUEST','PING', hndl_serverping)
     add_irc_handler('SERVER_REQUEST', 'NOTICE', generic_notice)
+    add_irc_handler('SERVER_REQUEST', 'ERROR', hndl_died)
 
     # server notices
     add_irc_handler('SERVER_NOTICE', 'QUIT', hndl_died)
@@ -216,5 +219,5 @@ def init(sq):
     add_irc_handler('NUMERIC','376', hndl_376)
 
     # cmd dispatch
-    add_cmd_handler(".", ".quit", cmd_quit)
+    add_cmd_handler(".", ".die", cmd_quit)
     return True
