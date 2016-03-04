@@ -16,16 +16,10 @@
 #     }
 # }
 from __future__ import print_function
-import sys, re
+import sys
 
-handler_dict = {
-    'SERVER_NOTICE' : {},
-    'SERVER_REQUEST' : {},
-    'NUMERIC' : {}
-}
-
-cmd_dict = {}
-
+handler_dict = dict()
+cmd_dict = dict()
 client_dict = dict()
 
 # states
@@ -94,17 +88,16 @@ def irc_register(nick, username, extra1, extra2, gecos ):
 # --------------------------------------------------------------------------------
 
 
-def generic_notice(sq, parsedmsg):
+def generic_notice(msg, parsedmsg):
     return True
 
-
-def hndl_serverping(sq, parsedmsg):
+def hndl_serverping(msg, parsedmsg):
     write_sock(str.format("PONG %s\r\n" % parsedmsg[1].lstrip(':')))
     return True
 
 
 # end of MOTD a.k.a. succesfully connected to irc and registered
-def hndl_376(sq, parsedmsg):
+def hndl_376(msg, parsedmsg):
     global is_registered
     global conf
     global is_opered
@@ -115,14 +108,14 @@ def hndl_376(sq, parsedmsg):
     return True
 
 # successfully opered up message
-def hndl_381(sq, parsedmsg):
+def hndl_381(msg, parsedmsg):
     global is_opered
     is_opered = True
     irc_setumode( parsedmsg[2], "+CZbdfiklnorsuwxyz")
     return True
 
 # there was a quit message but we didn't issue a QUIT command to the server
-def hndl_died(sq, parsedmsg):
+def hndl_died(msg, parsedmsg):
     global selfquit
     global is_connected
     global sendq
@@ -141,7 +134,7 @@ def hndl_died(sq, parsedmsg):
 # --------------------------------------------------------------------------------
 
 
-def cmd_quit(sender, target, msg):
+def cmd_quit(msg, parsedmsg):
     global selfquit
     selfquit = True
     msg = msg.split(maxsplit=4)
@@ -151,77 +144,100 @@ def cmd_quit(sender, target, msg):
         write_sock( str.format("QUIT :killroy was here!\r\n"))
     return True
 
+def cmd_check(msg, parsedmsg):
+    sender, x, target, pmsg = msg.split(maxsplit=3)
+
+    # strip leading : from actual message sent
+    if pmsg[0] == ":":
+        pmsg = pmsg[1:]
+
+    if pmsg[0] == ".":
+        cmd_dispatch(msg)
+    return True
+
+def cmd_raw(msg, parsedmsg):
+    sender, x, target, cmd, cmdargs = msg.split(maxsplit=4)
+    write_sock(
+        str.format( "%s\r\n" % cmdargs)
+    )
+    return True
+
 # dispatch code
 # --------------------------------------------------------------------------------
 
-# handle various server messages
-def irc_dispatch(sq, rawmsg):
+# dispatch various server messages to their registered handlers
+def irc_dispatch(rawmsg):
+
+    if debug and len (rawmsg) > 0:
+        print("-> %s" % rawmsg.rstrip('\n'), file=sys.stderr)
+
     global handler_dict
-    parsedmsg = rawmsg.split(maxsplit=3)
-    if len(parsedmsg) < 2:
-        return
+    parsedmsg = rawmsg.split()
 
-    print("line - %s" % rawmsg, file=sys.stderr)
+    for i in range( len( parsedmsg ) ):
 
-    if is_int( parsedmsg[1] ):
-        # its a numeric so iterate through all handlers registered to it
-        numericlist = handler_dict['NUMERIC']
-        if parsedmsg[1] in numericlist:
-            for i in range(len(numericlist[parsedmsg[1]])):
-                numericlist[parsedmsg[1]][i](sq, parsedmsg)
-    elif parsedmsg[0][0] is not ':' and '!' not in parsedmsg[0]:
-        # its a server request and we need to answer
-        # EG: PING needs a PONG
-        reqlist = handler_dict['SERVER_REQUEST']
-        if parsedmsg[0] in reqlist:
-            for i in range(len(reqlist[parsedmsg[0]])):
-                reqlist[parsedmsg[0]][i](sq, parsedmsg)
-    elif parsedmsg[0][0] == ':' and '!' in parsedmsg[0] and parsedmsg[1] =='PRIVMSG':
-        # send PRIVMSG to cmd_dispatch()
-        print("send PM to cmd dispatch", file=sys.stderr)
-        cmd_dispatch(rawmsg)
-    else:
-        # treat everything else as a server notice
-        snlist = handler_dict['SERVER_NOTICE']
-        if parsedmsg[1] in snlist:
-            for i in range( len(snlist[parsedmsg[1]]) ):
-                snlist[parsedmsg[1]][i](sq, rawmsg)
+        # do we have a bucket for this?
+        if i in handler_dict:
+
+            # do we have triggers for this in the bucket?
+            if parsedmsg[i] in handler_dict[i]:
+                #we do so grab handler function list and call them all in succession
+                handlerlist = handler_dict[i][ parsedmsg[i] ]
+                for n in range( len( handlerlist) ):
+                    handlerlist[n](rawmsg, parsedmsg)
+
+        #step
+        else:
+            continue
     return
 
 
 # handle commands by PRIVMSG
 def cmd_dispatch(rawmsg):
-    parsedpm = rawmsg.split(maxsplit=4)
-    sender = re.split("\!|\@", parsedpm[0].lstrip(':'))
-    target = parsedpm[2]
-    realmsg = parsedpm[3].lstrip(':').split(maxsplit=1)
-    if realmsg[0] in cmd_dict:
-        for i in range( len(cmd_dict[realmsg[0]]) ):
-            cmd_dict[realmsg[0]][i]( sender, target, rawmsg )
+    global cmd_dict
+    sender, x, target, cmd, cmdargs = rawmsg.split(maxsplit=4)
+
+    if cmd[0] == ":":
+        cmd = cmd[1:]
+
+    if cmd not in cmd_dict:
+        return False
+
+    if cmd in cmd_dict:
+        pmsg = rawmsg.split()
+        handlerlist = cmd_dict[cmd]
+        for i in range( len(handlerlist)):
+            handlerlist[i](rawmsg, pmsg)
+
     return True
 
 # add a handler to the function list for a given irc message
-def add_irc_handler(msgclass, msgtype, function):
+def add_irc_handler(bucket, trigger, func):
     global handler_dict
 
-    if msgtype not in handler_dict[msgclass]:
-        # no handlers exist for that msgtype so make a new one with empty list
-        handler_dict[msgclass][msgtype] = list()
+    #bucket doesn't exist so create it empty
+    if bucket not in handler_dict:
+        handler_dict[bucket] = dict()
 
-    handler_dict[msgclass][msgtype].append(function)
+    #trigger does not exist in the bucket so create it empty
+    if trigger not in handler_dict[bucket]:
+        handler_dict[bucket][trigger] = list()
+
+    #insert the handler function
+    handler_dict[bucket][trigger].append(func)
+
     return
 
-def add_cmd_handler(trigger, cmd, function):
+def add_cmd_handler(cmd, func):
     if cmd not in cmd_dict:
         cmd_dict[cmd] = list()
-
-    cmd_dict[cmd].append(function)
+    cmd_dict[cmd].append(func)
     return True
 
 # initialize module and handlers
 # NOTE:  these handlers are APPENDED to the list for the msgtype and are not meant to be added and removed dynamically
 # --------------------------------------------------------------------------------
-def init(sq, config):
+def init(sq, config, debug_mode=False):
     # register on irc
     global sendq
     sendq = sq
@@ -229,18 +245,24 @@ def init(sq, config):
     global conf
     conf = config
 
+    global debug
+    debug = debug_mode
     # server requests such as PING
-    add_irc_handler('SERVER_REQUEST','PING', hndl_serverping)
-    add_irc_handler('SERVER_REQUEST', 'NOTICE', generic_notice)
-    add_irc_handler('SERVER_REQUEST', 'ERROR', hndl_died)
+    add_irc_handler(0,'PING', hndl_serverping)
+    add_irc_handler(0, 'NOTICE', generic_notice)
+    add_irc_handler(0, 'ERROR', hndl_died)
 
     # server notices
-    add_irc_handler('SERVER_NOTICE', 'QUIT', hndl_died)
+    add_irc_handler(0, 'QUIT', hndl_died)
 
     # numerics
-    add_irc_handler('NUMERIC','376', hndl_376)
-    add_irc_handler('NUMERIC', '381', hndl_381)
+    add_irc_handler(1,'376', hndl_376)
+    add_irc_handler(1, '381', hndl_381)
+
+    # first privmsg handler should look for commands
+    add_irc_handler(1, 'PRIVMSG', cmd_check)
 
     # cmd dispatch
-    add_cmd_handler(".", ".die", cmd_quit)
+    add_cmd_handler(".die", cmd_quit)
+    add_cmd_handler(".raw", cmd_raw)
     return True

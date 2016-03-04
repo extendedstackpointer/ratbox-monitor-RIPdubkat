@@ -85,7 +85,7 @@ if __name__ == "__main__":
 
     # we're offically connected so spin up handlers and register
     irchandlers.is_connected = True
-    irchandlers.init(send_q, conf)
+    irchandlers.init(send_q, conf, debug_mode=True )
 
     irchandlers.irc_register(conf['IRCNICK'],conf['IRCUSER'], '0','0',conf['IRCNAME'])
 
@@ -134,7 +134,7 @@ if __name__ == "__main__":
 
             for i in range( len(splitbuf) ):
                 splitbuf[i] = splitbuf[i].strip('\r')
-                irchandlers.irc_dispatch(send_q, splitbuf[i])
+                irchandlers.irc_dispatch(splitbuf[i])
 
             # let recv() append to the remainder of the last socket buffer
             rawbuf = left
