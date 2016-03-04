@@ -71,17 +71,16 @@ if __name__ == "__main__":
 
     users = getjson(conf['USERFILE'])
 
-# main loop
+# setup the socket, queues, and irc connection
 # --------------------------------------------------------------------------------
 
     s = connect.do_connect(conf['IRCSERVER'], int(conf['IRCPORT']), conf['USE_SSL'])
 
-    inputs = [ s ]
-    #manager = multiprocessing.Manager()
-    send_q = multiprocessing.Queue(5000)
-
     if not s:
         sys.exit(-1)
+
+    #manager = multiprocessing.Manager()
+    send_q = multiprocessing.Queue(5000)
 
     # we're offically connected so spin up handlers and register
     irchandlers.is_connected = True
@@ -93,6 +92,8 @@ if __name__ == "__main__":
     sqchild = multiprocessing.Process( target=sendq_worker, args=(s,send_q,))
     sqchild.start()
 
+# main loop
+# --------------------------------------------------------------------------------
 
     rawbuf = bytes()
     while True:
@@ -101,7 +102,7 @@ if __name__ == "__main__":
             break
 
         try:
-            readable, writable, excepts = select.select( inputs, [], [] )
+            readable, writable, excepts = select.select( [ s ], [], [] )
             if s in readable:
                 if len(rawbuf) > 0:
                     rawbuf += s.recv(1024)

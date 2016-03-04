@@ -1,5 +1,6 @@
 * complete dm2rbmon.py dat/config conversion tool
 * implement confcheck via cmdargs
+* fork() main thread and implement logging
 * numeric 708 handler for etrace return data
 * sample /who output for IRCNET compatibility
 * track bot irc state (umodes, channel modes, userchan modes)
