@@ -1,3 +1,4 @@
+from __future__ import print_function
 import sys, json, argparse, time, socket, errno, select, ssl
 import multiprocessing
 import modules.connect as connect
