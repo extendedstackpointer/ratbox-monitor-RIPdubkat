@@ -74,6 +74,11 @@ def irc_privmsg(target, data):
     )
     return True
 
+def irc_setumode(mynick, modelist):
+    write_sock(
+        str.format("MODE %s %s\r\n" % (mynick, modelist) )
+    )
+    return True
 
 # to register after connecting
 def irc_register(nick, username, extra1, extra2, gecos ):
@@ -109,6 +114,12 @@ def hndl_376(sq, parsedmsg):
     write_sock(str.format("OPER %s %s\r\n" % (conf['OPERNICK'], conf['OPERPASS']) ) )
     return True
 
+# successfully opered up message
+def hndl_381(sq, parsedmsg):
+    global is_opered
+    is_opered = True
+    irc_setumode( parsedmsg[2], "+CZbdfiklnorsuwxyz")
+    return True
 
 # there was a quit message but we didn't issue a QUIT command to the server
 def hndl_died(sq, parsedmsg):
@@ -228,6 +239,7 @@ def init(sq, config):
 
     # numerics
     add_irc_handler('NUMERIC','376', hndl_376)
+    add_irc_handler('NUMERIC', '381', hndl_381)
 
     # cmd dispatch
     add_cmd_handler(".", ".die", cmd_quit)
