@@ -45,7 +45,7 @@ def sendq_worker( sk, sq, ):
             amsg = sq.get()
             if amsg is None or amsg == "died":
                 return
-            print("sent: %s" % amsg, file=sys.stderr)
+            print("<- %s" % amsg, file=sys.stderr)
             sk.send(amsg)
     return
 
@@ -74,7 +74,7 @@ if __name__ == "__main__":
 # main loop
 # --------------------------------------------------------------------------------
 
-    s = connect.do_connect(conf['IRCSERVER'], int(conf['IRCPORT']), True)
+    s = connect.do_connect(conf['IRCSERVER'], int(conf['IRCPORT']), conf['USE_SSL'])
 
     inputs = [ s ]
     #manager = multiprocessing.Manager()
@@ -95,7 +95,10 @@ if __name__ == "__main__":
 
 
     rawbuf = bytes()
-    while irchandlers.is_connected:
+    while True:
+        if not irchandlers.is_connected:
+            # we should probably further handle socket death here
+            break
 
         try:
             readable, writable, excepts = select.select( inputs, [], [] )
@@ -112,7 +115,7 @@ if __name__ == "__main__":
                         dataleft = s.pending()
 
             else:
-                break
+                irchandlers.is_connected=False
         except OSError:
             break
 

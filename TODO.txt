@@ -1,8 +1,18 @@
-* child process messaging protocol
-* IRC/RFC message map
-* initial IRC msg handlers
-* async resolver
-* stats queries and storage
-* PRIVMSG cmd interface
-* remote update
+* complete dm2rbmon.py dat/config conversion tool
+* implement confcheck via cmdargs
+* numeric 708 handler for etrace return data
+* sample /who output for IRCNET compatibility
+* track bot irc state (umodes, channel modes, userchan modes)
+* track socket state
+* make worker handle ban queues
+* make worker handle DNS lookup queues
+* DNSBL handling from DNS queue
+* SEEDRAND
+* qurvelist handling
+* BUG: cleanly handle disconnect decisions (I.E. rebuild socket or die appropriately)
+* user authorization checking for commands
+* DNS queue async resolver via worker(s)
+* build up hashes at connect
+* remote update via github in-place from irc command
 * SSL client certificate authentication
+* proper README.MD!!!

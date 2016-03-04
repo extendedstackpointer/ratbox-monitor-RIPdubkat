@@ -4,17 +4,29 @@
 
 # handler function structure
 # this maps each type of message with a list of handler functions for that message type
+# when it occurs in a specific position within the server message.
+#
 # dispatch should be able to iterate over these.
 # example structure:
 # hander_dict{
-#     'NUMERIC' : {
-#         '376' : [
+#     0 : {
+#         'PING' : [
 #             handler1(),
 #             handler2(),
-#             handler3()
+#             handler3(),
+#             ...
+#         ]
+#     }
+#     1 : {
+#         'PRIVMSG' : [
+#             hander1(),
+#             handler2(),
+#             handler3(),
+#             ...
 #         ]
 #     }
 # }
+
 from __future__ import print_function
 import sys
 
@@ -23,6 +35,7 @@ cmd_dict = dict()
 client_dict = dict()
 
 # states
+# TODO: create global state data structure
 is_connected = False
 is_registered = False
 is_opered = False
@@ -40,12 +53,7 @@ def is_int(val):
         return False
     return True
 
-
-def get_clients():
-    global client_dict
-    return client_dict
-
-
+# put raw IRC proto into send queue for worker thread to push onto socket
 def write_sock(strfmsg):
     global sendq
     msg = bytes( strfmsg, 'utf-8')
@@ -55,17 +63,13 @@ def write_sock(strfmsg):
 
 # send a CTCP response
 def ctcp_reply(target, cmd, data):
-    write_sock(
-        str.format("PRIVMSG %s :\x01%s\x01 %s") % (target, cmd, data)
-    )
+    write_sock(str.format("PRIVMSG %s :\x01%s\x01 %s") % (target, cmd, data))
     return True
 
 
 # send a privmsg
 def irc_privmsg(target, data):
-    write_sock(
-        str.format("PRIVMSG %s :%s") % (target, data)
-    )
+    write_sock(str.format("PRIVMSG %s :%s") % (target, data))
     return True
 
 def irc_setumode(mynick, modelist):
@@ -78,10 +82,8 @@ def irc_setumode(mynick, modelist):
 def irc_register(nick, username, extra1, extra2, gecos ):
     global is_connected
     is_connected=True
-    #global sendq
     write_sock(str.format("NICK %s\r\n" % nick))
     write_sock(str.format("USER %s %s %s :%s\r\n" % (username, extra1, extra2, gecos)) )
-
     return True
 
 # basic irc handlers
@@ -100,10 +102,10 @@ def hndl_serverping(msg, parsedmsg):
 def hndl_376(msg, parsedmsg):
     global is_registered
     global conf
-    global is_opered
     is_registered=True
-    is_opered = True
-    write_sock(str.format("MODE %s +iwg\r\n" % parsedmsg[2]))
+    irc_setumode( parsedmsg[2], "+iwg")
+
+    # attempt to oper up!
     write_sock(str.format("OPER %s %s\r\n" % (conf['OPERNICK'], conf['OPERPASS']) ) )
     return True
 
@@ -115,33 +117,30 @@ def hndl_381(msg, parsedmsg):
     return True
 
 # there was a quit message but we didn't issue a QUIT command to the server
-def hndl_died(msg, parsedmsg):
+def hndl_quit(msg, parsedmsg):
     global selfquit
     global is_connected
-    global sendq
-    if not selfquit:
-        # poison the queue so it handles the disco in managing process
+
+    if selfquit:
+        # we selfquit so insert poison pill into Queue to kill child worker and exit this process
         sendq.put(None)
         sys.exit(0)
-    else:
-        # adjust data sets for a client quit
-        is_connected = False
         return True
-    is_connected = False
+
     return True
 
 # cmd handlers for privmsg
 # --------------------------------------------------------------------------------
 
 
-def cmd_quit(msg, parsedmsg):
+def cmd_die(msg, parsedmsg):
     global selfquit
     selfquit = True
     msg = msg.split(maxsplit=4)
     if len(msg) == 5:
         write_sock( str.format("QUIT :%s\r\n" % msg[4]) )
     else:
-        write_sock( str.format("QUIT :killroy was here!\r\n"))
+        write_sock( "QUIT :killroy was here!\r\n" )
     return True
 
 def cmd_check(msg, parsedmsg):
@@ -160,6 +159,11 @@ def cmd_raw(msg, parsedmsg):
     write_sock(
         str.format( "%s\r\n" % cmdargs)
     )
+    return True
+
+def cmd_etrace(msg, parsedmsg):
+    sender, x, target, cmd, cmdargs = msg.split(maxsplit=4)
+    write_sock(str.format("ETRACE %s\r\n" % cmdargs))
     return True
 
 # dispatch code
@@ -200,9 +204,11 @@ def cmd_dispatch(rawmsg):
     if cmd[0] == ":":
         cmd = cmd[1:]
 
+    # we don't have a handler for this. skip!
     if cmd not in cmd_dict:
         return False
 
+    # found a handler list.  call em.
     if cmd in cmd_dict:
         pmsg = rawmsg.split()
         handlerlist = cmd_dict[cmd]
@@ -250,10 +256,10 @@ def init(sq, config, debug_mode=False):
     # server requests such as PING
     add_irc_handler(0,'PING', hndl_serverping)
     add_irc_handler(0, 'NOTICE', generic_notice)
-    add_irc_handler(0, 'ERROR', hndl_died)
+    # add_irc_handler(0, 'ERROR', hndl_died)
 
     # server notices
-    add_irc_handler(0, 'QUIT', hndl_died)
+    add_irc_handler(1, 'QUIT', hndl_quit)
 
     # numerics
     add_irc_handler(1,'376', hndl_376)
@@ -263,6 +269,7 @@ def init(sq, config, debug_mode=False):
     add_irc_handler(1, 'PRIVMSG', cmd_check)
 
     # cmd dispatch
-    add_cmd_handler(".die", cmd_quit)
+    add_cmd_handler(".die", cmd_die)
     add_cmd_handler(".raw", cmd_raw)
+    add_cmd_handler(".etrace", cmd_etrace)
     return True
