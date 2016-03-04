@@ -35,13 +35,14 @@ is_opered = False
 selfquit = False
 debug = False
 sendq = None
+conf = None
 
 # utility functions
 # --------------------------------------------------------------------------------
 def is_int(val):
     try:
         v = int(val)
-    except:
+    except ValueError:
         return False
     return True
 
@@ -52,6 +53,7 @@ def get_clients():
 
 
 def write_sock(strfmsg):
+    global sendq
     msg = bytes( strfmsg, 'utf-8')
     sendq.put( msg )
     return
@@ -75,9 +77,9 @@ def irc_privmsg(target, data):
 
 # to register after connecting
 def irc_register(nick, username, extra1, extra2, gecos ):
-    if not is_connected:
-        return False
-    global sendq
+    global is_connected
+    is_connected=True
+    #global sendq
     write_sock(str.format("NICK %s\r\n" % nick))
     write_sock(str.format("USER %s %s %s :%s\r\n" % (username, extra1, extra2, gecos)) )
 
@@ -99,10 +101,12 @@ def hndl_serverping(sq, parsedmsg):
 # end of MOTD a.k.a. succesfully connected to irc and registered
 def hndl_376(sq, parsedmsg):
     global is_registered
-    global is_connected
+    global conf
+    global is_opered
     is_registered=True
-    is_connected=True
+    is_opered = True
     write_sock(str.format("MODE %s +iwg\r\n" % parsedmsg[2]))
+    write_sock(str.format("OPER %s %s\r\n" % (conf['OPERNICK'], conf['OPERPASS']) ) )
     return True
 
 
@@ -110,11 +114,14 @@ def hndl_376(sq, parsedmsg):
 def hndl_died(sq, parsedmsg):
     global selfquit
     global is_connected
+    global sendq
     if not selfquit:
         # poison the queue so it handles the disco in managing process
-        write_sock( "died." )
+        sendq.put(None)
+        sys.exit(0)
     else:
         # adjust data sets for a client quit
+        is_connected = False
         return True
     is_connected = False
     return True
@@ -124,9 +131,11 @@ def hndl_died(sq, parsedmsg):
 
 
 def cmd_quit(sender, target, msg):
+    global selfquit
     selfquit = True
-    if len(msg) == 2:
-        write_sock( str.format("QUIT :%s\r\n" % msg[1]) )
+    msg = msg.split(maxsplit=4)
+    if len(msg) == 5:
+        write_sock( str.format("QUIT :%s\r\n" % msg[4]) )
     else:
         write_sock( str.format("QUIT :killroy was here!\r\n"))
     return True
@@ -141,7 +150,7 @@ def irc_dispatch(sq, rawmsg):
     if len(parsedmsg) < 2:
         return
 
-    print(rawmsg, file=sys.stderr)
+    print("line - %s" % rawmsg, file=sys.stderr)
 
     if is_int( parsedmsg[1] ):
         # its a numeric so iterate through all handlers registered to it
@@ -174,10 +183,10 @@ def cmd_dispatch(rawmsg):
     parsedpm = rawmsg.split(maxsplit=4)
     sender = re.split("\!|\@", parsedpm[0].lstrip(':'))
     target = parsedpm[2]
-    realmsg = parsedpm[3].lstrip(':').split(maxsplit=2)
+    realmsg = parsedpm[3].lstrip(':').split(maxsplit=1)
     if realmsg[0] in cmd_dict:
         for i in range( len(cmd_dict[realmsg[0]]) ):
-            cmd_dict[realmsg[0]][i]( sender, target, realmsg )
+            cmd_dict[realmsg[0]][i]( sender, target, rawmsg )
     return True
 
 # add a handler to the function list for a given irc message
@@ -201,14 +210,18 @@ def add_cmd_handler(trigger, cmd, function):
 # initialize module and handlers
 # NOTE:  these handlers are APPENDED to the list for the msgtype and are not meant to be added and removed dynamically
 # --------------------------------------------------------------------------------
-def init(sq):
+def init(sq, config):
     # register on irc
     global sendq
     sendq = sq
 
+    global conf
+    conf = config
+
     # server requests such as PING
     add_irc_handler('SERVER_REQUEST','PING', hndl_serverping)
     add_irc_handler('SERVER_REQUEST', 'NOTICE', generic_notice)
+    add_irc_handler('SERVER_REQUEST', 'ERROR', hndl_died)
 
     # server notices
     add_irc_handler('SERVER_NOTICE', 'QUIT', hndl_died)
@@ -217,5 +230,5 @@ def init(sq):
     add_irc_handler('NUMERIC','376', hndl_376)
 
     # cmd dispatch
-    add_cmd_handler(".", ".quit", cmd_quit)
+    add_cmd_handler(".", ".die", cmd_quit)
     return True

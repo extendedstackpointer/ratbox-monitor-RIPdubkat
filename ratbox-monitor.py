@@ -1,11 +1,9 @@
 from __future__ import print_function
-import sys, json, argparse, time, socket, errno
+import sys, json, argparse, time, socket, errno, select, ssl
 import multiprocessing
 import modules.connect as connect
 import modules.irc as irchandlers
 
-# constants
-message_type = ['SERVER_NOTICE', 'NUMERIC', 'PRIVMSG_NOTICE']
 
 def getjson(fpath):
     try:
@@ -24,45 +22,32 @@ def getjson(fpath):
     fh.close()
     return ret
 
-def send_now(sk, msg):
-    if msg is None:
-        return
-    print("sending: %s" % msg, file=sys.stderr)
-    sk.send(msg)
-    return
-
-def slow_dumpq(sk, sq):
-    while not sq.empty():
-        amsg = sq.get()
-        if amsg is None or not amsg:
-            break
-        time.sleep(1)
-        send_now(sk, amsg)
-        del amsg
-    return
-
-def fast_dumpq(sk, sq):
-    while not sq.empty():
-        amsg = sq.get()
-
-        if amsg is None:
-            break
-
-        # gracefully handle exit
-        if amsg == "died.":
-            del sq
-            sk.close()
-            return
-        send_now(sk, amsg)
-        del amsg
-    return
-
 def fixlines(sockbuff):
-    str = sockbuff.decode('utf-8')
-    clean = str[0:str.rfind('\n')+1]
-    remainder = bytes(str[str.rfind('\n')+1:], 'utf-8')
+    st = sockbuff.decode('utf-8')
+    clean = st[0:st.rfind('\n')+1]
+    remainder = bytes(st[st.rfind('\n')+1:], 'utf-8')
     return clean, remainder
 
+def cleanup(sock, q):
+    sock.close()
+    print("dying...")
+    q.put(None)
+    sys.exit(0)
+
+# empty the sendq onto the socket when full, checking every 1/100000 second for work
+def sendq_worker( sk, sq, ):
+    while True:
+        if sq.empty():
+            #sleep so as to not race during idle
+            time.sleep(1/100000)
+            continue
+        if sk and not sq.empty():
+            amsg = sq.get()
+            if amsg is None or amsg == "died":
+                return
+            print("sent: %s" % amsg, file=sys.stderr)
+            sk.send(amsg)
+    return
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ratbox-monitor is a re-write intended to replace Drone Connection Monitor a.ka. dronemon.pl by powuh")
@@ -89,57 +74,74 @@ if __name__ == "__main__":
 # main loop
 # --------------------------------------------------------------------------------
 
-    #s = connect.do_connect('69.31.127.6', 9999, True )
-    s = connect.do_connect('198.47.99.99', 6667, False)
+    s = connect.do_connect(conf['IRCSERVER'], int(conf['IRCPORT']), True)
+
+    inputs = [ s ]
     #manager = multiprocessing.Manager()
     send_q = multiprocessing.Queue(5000)
 
     if not s:
         sys.exit(-1)
 
-
     # we're offically connected so spin up handlers and register
     irchandlers.is_connected = True
-    irchandlers.init(send_q)
+    irchandlers.init(send_q, conf)
 
-    # fix this to derive values from config file
-    irchandlers.irc_register('justatest','esp', '0','0','derp')
+    irchandlers.irc_register(conf['IRCNICK'],conf['IRCUSER'], '0','0',conf['IRCNAME'])
+
+    #kick off sendq helper
+    sqchild = multiprocessing.Process( target=sendq_worker, args=(s,send_q,))
+    sqchild.start()
+
 
     rawbuf = bytes()
-    while True:
-
-        if not send_q.empty():
-            # send_q.put(None)
-            fast_dumpq(s, send_q)
-            if not s:
-                del send_q
-                break
+    while irchandlers.is_connected:
 
         try:
-            if len(rawbuf) > 0:
-                rawbuf += s.recv(1280)
+            readable, writable, excepts = select.select( inputs, [], [] )
+            if s in readable:
+                if len(rawbuf) > 0:
+                    rawbuf += s.recv(1024)
+                else:
+                    rawbuf = s.recv(1024)
+
+                if type(s) == ssl.SSLSocket:
+                    dataleft = s.pending()
+                    while dataleft:
+                        rawbuf += s.recv(dataleft)
+                        dataleft = s.pending()
+
             else:
-                rawbuf = s.recv(1280)
+                break
+        except OSError:
+            break
+
         except socket.error as e:
             err = e.args[0]
             if err == errno.EAGAIN or err == errno.EWOULDBLOCK:
-                continue
-            else:
-                print("Hes dead jim.", file=sys.stderr)
-                irchandlers.is_connected=False
-                sys.exit(0)
+                raise
+            continue
 
-        # fix issues with newline versus socket recv() buffer
-        cleanlines, left = fixlines(rawbuf)
+        except ssl.SSLError as e:
+            if e.errno != ssl.SSL_ERROR_WANT_READ:
+                raise
+            continue
 
-        splitbuf = cleanlines.split('\n')
-        for i in range( len(splitbuf) ):
-            splitbuf[i] = splitbuf[i].strip('\r')
-            irchandlers.irc_dispatch(send_q, splitbuf[i])
+        if rawbuf:
+            # fix issues with newline versus socket recv() buffer
+            cleanlines, left = fixlines(rawbuf)
+            splitbuf = cleanlines.split('\n')
 
-        # let recv() append to the remainder of the socket buffer
-        rawbuf = left
+            for i in range( len(splitbuf) ):
+                splitbuf[i] = splitbuf[i].strip('\r')
+                irchandlers.irc_dispatch(send_q, splitbuf[i])
 
+            # let recv() append to the remainder of the last socket buffer
+            rawbuf = left
+
+    cleanup(s, send_q)
+    sqchild.join_thread()
+    sqchild.join()
     sys.exit(0)
 
 
