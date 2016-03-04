@@ -1,7 +1,7 @@
 # ratbox-monitor
 ratbox-monitor is intended to be an updated re-write of dronemon.pl.  Ultimately, we expect it to be a superset of dronemon and BOPM's original features.  
 
-Here are a few of the planned features and design goals include:
+Here are a few of the planned features and design goals:
 
 * event/handler driven code framework
 * multiprocess support
