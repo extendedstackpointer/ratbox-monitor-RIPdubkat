@@ -17,21 +17,23 @@ def do_connect(host, port, use_ssl, timeout=None):
 
             #defaults to PROTOCOL_v23 in client mode.  ciphers will be negotiated based on handshake from server
             sock = ssl.wrap_socket( s )
-            sock.setblocking(False)
+            #sock.setblocking(False)
         else:
             sock = socket.socket( socket.AF_INET, socket.SOCK_STREAM)
-            fcntl.fcntl(sock, fcntl.F_SETFL, os.O_NONBLOCK)
+            #fcntl.fcntl(sock, fcntl.F_SETFL, os.O_NONBLOCK)
 
     # do IPv6
     else:
         if use_ssl:
             s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
             sock = ssl.wrap_socket( s )
-            sock.setblocking(False)
+            #sock.setblocking(False)
         else:
             sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-            fcntl.fcntl(sock, fcntl.F_SETFL, os.O_NONBLOCK)
+            #fcntl.fcntl(sock, fcntl.F_SETFL, os.O_NONBLOCK)
 
+    # don't block
+    sock.setblocking(False)
     sock.settimeout(timeout)
 
     # light this candle

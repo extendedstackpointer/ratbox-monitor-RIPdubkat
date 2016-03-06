@@ -28,20 +28,19 @@
 # }
 
 from __future__ import print_function
-import sys
+import sys, time
 
+# handlers
 handler_dict = dict()
 cmd_dict = dict()
+
+# client hash
 client_dict = dict()
 
-# states
-# TODO: create global state data structure
-is_connected = False
-is_registered = False
-is_opered = False
-selfquit = False
-debug = False
-sendq = None
+# application and network states
+st = False
+
+# parsed config file
 conf = None
 
 # utility functions
@@ -55,9 +54,9 @@ def is_int(val):
 
 # put raw IRC proto into send queue for worker thread to push onto socket
 def write_sock(strfmsg):
-    global sendq
+    global st
     msg = bytes( strfmsg, 'utf-8')
-    sendq.put( msg )
+    st['queue'].put( msg )
     return
 
 
@@ -80,8 +79,6 @@ def irc_setumode(mynick, modelist):
 
 # to register after connecting
 def irc_register(nick, username, extra1, extra2, gecos ):
-    global is_connected
-    is_connected=True
     write_sock(str.format("NICK %s\r\n" % nick))
     write_sock(str.format("USER %s %s %s :%s\r\n" % (username, extra1, extra2, gecos)) )
     return True
@@ -100,9 +97,8 @@ def hndl_serverping(msg, parsedmsg):
 
 # end of MOTD a.k.a. succesfully connected to irc and registered
 def hndl_376(msg, parsedmsg):
-    global is_registered
-    global conf
-    is_registered=True
+    global st
+    st['bot']['registered'] = True
     irc_setumode( parsedmsg[2], "+iwg")
 
     # attempt to oper up!
@@ -111,31 +107,40 @@ def hndl_376(msg, parsedmsg):
 
 # successfully opered up message
 def hndl_381(msg, parsedmsg):
-    global is_opered
-    is_opered = True
+    global st
+    st['bot']['opered'] = True
     irc_setumode( parsedmsg[2], "+CZbdfiklnorsuwxyz")
     return True
 
 # there was a quit message but we didn't issue a QUIT command to the server
-def hndl_quit(msg, parsedmsg):
-    global selfquit
-    global is_connected
+# def hndl_quit(msg, parsedmsg):
+#     global st
+#
+#     if st['bot']['selfquit']:
+#         # we selfquit so insert poison pill into Queue to kill child worker and exit this process
+#         st['queue'].put(None)
+#         return True
+#     else:
+#         #
+#     return True
 
-    if selfquit:
-        # we selfquit so insert poison pill into Queue to kill child worker and exit this process
-        sendq.put(None)
-        sys.exit(0)
-        return True
+def hndl_pong(msg, parsedmsg):
+    global st
+    t = time.time()
+    st['socket']['lag'] = (t - st['socket']['lastping'])
 
-    return True
 
+def hndl_error(msg, parsedmsg):
+    global st
+    st['socket']['connected'] = False
+    return
 # cmd handlers for privmsg
 # --------------------------------------------------------------------------------
 
 
 def cmd_die(msg, parsedmsg):
-    global selfquit
-    selfquit = True
+    global st
+    st['bot']['selfquit'] = True
     msg = msg.split(maxsplit=4)
     if len(msg) == 5:
         write_sock( str.format("QUIT :%s\r\n" % msg[4]) )
@@ -147,8 +152,7 @@ def cmd_check(msg, parsedmsg):
     sender, x, target, pmsg = msg.split(maxsplit=3)
 
     # strip leading : from actual message sent
-    if pmsg[0] == ":":
-        pmsg = pmsg[1:]
+    pmsg = pmsg[1:]
 
     if pmsg[0] == ".":
         cmd_dispatch(msg)
@@ -156,9 +160,7 @@ def cmd_check(msg, parsedmsg):
 
 def cmd_raw(msg, parsedmsg):
     sender, x, target, cmd, cmdargs = msg.split(maxsplit=4)
-    write_sock(
-        str.format( "%s\r\n" % cmdargs)
-    )
+    write_sock(str.format( "%s\r\n" % cmdargs))
     return True
 
 def cmd_etrace(msg, parsedmsg):
@@ -166,13 +168,21 @@ def cmd_etrace(msg, parsedmsg):
     write_sock(str.format("ETRACE %s\r\n" % cmdargs))
     return True
 
+def cmd_lag(msg, parsedmsg):
+    global st
+    sender_nick = parsedmsg[0][1:][0:parsedmsg[0][1:].find('!')]
+    #sender_nick = sender[1:sender.find('!')]
+    msg = str.format("lag: %d seconds\r\n" % st['socket']['lag'])
+    irc_privmsg( sender_nick, msg )
+    return True
+
 # dispatch code
 # --------------------------------------------------------------------------------
 
 # dispatch various server messages to their registered handlers
 def irc_dispatch(rawmsg):
-
-    if debug and len (rawmsg) > 0:
+    global st
+    if st['bot']['debug_mode'] and len (rawmsg) > 0:
         print("-> %s" % rawmsg.rstrip('\n'), file=sys.stderr)
 
     global handler_dict
@@ -199,7 +209,14 @@ def irc_dispatch(rawmsg):
 # handle commands by PRIVMSG
 def cmd_dispatch(rawmsg):
     global cmd_dict
-    sender, x, target, cmd, cmdargs = rawmsg.split(maxsplit=4)
+    parsedmsg = rawmsg.split(maxsplit=4)
+
+    sender = parsedmsg[0]
+    target = parsedmsg[2]
+    cmd = parsedmsg[3][1:]
+
+    #print("cmd: %s\nparsedmsglen: %d\nargs: %s" % (cmd, len(parsedmsg), parsedmsg[-1]), file=sys.stderr)
+    #return
 
     if cmd[0] == ":":
         cmd = cmd[1:]
@@ -243,33 +260,34 @@ def add_cmd_handler(cmd, func):
 # initialize module and handlers
 # NOTE:  these handlers are APPENDED to the list for the msgtype and are not meant to be added and removed dynamically
 # --------------------------------------------------------------------------------
-def init(sq, config, debug_mode=False):
+def init(config, state, debug_mode=False):
     # register on irc
-    global sendq
-    sendq = sq
-
+    global st
     global conf
+    global handler_dict
+    global cmd_dict
+
+    handler_dict = dict()
+    cmd_dict = dict()
+    st = state
     conf = config
 
-    global debug
-    debug = debug_mode
-    # server requests such as PING
-    add_irc_handler(0,'PING', hndl_serverping)
-    add_irc_handler(0, 'NOTICE', generic_notice)
-    # add_irc_handler(0, 'ERROR', hndl_died)
+    st['bot']['debug_mode'] = debug_mode
 
-    # server notices
-    add_irc_handler(1, 'QUIT', hndl_quit)
+
+    add_irc_handler(0,'PING', hndl_serverping)
+    add_irc_handler(0, 'PONG', hndl_pong)
+    add_irc_handler(0, 'NOTICE', generic_notice)
+    add_irc_handler(0, 'ERROR', hndl_error)
 
     # numerics
     add_irc_handler(1,'376', hndl_376)
     add_irc_handler(1, '381', hndl_381)
-
-    # first privmsg handler should look for commands
     add_irc_handler(1, 'PRIVMSG', cmd_check)
 
     # cmd dispatch
     add_cmd_handler(".die", cmd_die)
     add_cmd_handler(".raw", cmd_raw)
     add_cmd_handler(".etrace", cmd_etrace)
+    add_cmd_handler(".lag", cmd_lag)
     return True
