@@ -1,1 +1,6 @@
+AUTHOR:
 esp @ irc.mzima.net or extraspecialpwnie[at]gmail.com
+
+CONTRIBUTORS:
+rob @ irc.mzima.net
+dubkat
