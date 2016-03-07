@@ -28,14 +28,15 @@
 # }
 
 from __future__ import print_function
-import sys, time
+import sys, time, re, multiprocessing
 
 # handlers
 handler_dict = dict()
 cmd_dict = dict()
 
 # client hash
-client_dict = dict()
+mgr = multiprocessing.Manager()
+client_dict = mgr.dict()
 
 # application and network states
 st = False
@@ -68,7 +69,7 @@ def ctcp_reply(target, cmd, data):
 
 # send a privmsg
 def irc_privmsg(target, data):
-    write_sock(str.format("PRIVMSG %s :%s") % (target, data))
+    write_sock(str.format("PRIVMSG %s :%s\r\n") % (target, data))
     return True
 
 def irc_setumode(mynick, modelist):
@@ -83,12 +84,26 @@ def irc_register(nick, username, extra1, extra2, gecos ):
     write_sock(str.format("USER %s %s %s :%s\r\n" % (username, extra1, extra2, gecos)) )
     return True
 
+# determine sender of privmsg and respond directly
+# msgstr should either be #chan or nick!user@host format
+def get_sender(senderstr):
+    pmsg = senderstr.split()
+    if len(pmsg) < 3:
+        return
+    if pmsg[2][0] == '#':
+        return pmsg[2]
+    else:
+        return pmsg[0][1:pmsg[0].find('!')]
+    return False
+
+def strip_colors(text):
+    regex = re.compile("\x1f|\x02|\x03|\x16|\x0f(?:\d{1,2}(?:,\d{1,2})?)?", re.UNICODE)
+    ret = regex.sub('', text)
+    return ret
+
 # basic irc handlers
 # --------------------------------------------------------------------------------
 
-
-def generic_notice(msg, parsedmsg):
-    return True
 
 def hndl_serverping(msg, parsedmsg):
     write_sock(str.format("PONG %s\r\n" % parsedmsg[1].lstrip(':')))
@@ -98,8 +113,15 @@ def hndl_serverping(msg, parsedmsg):
 # end of MOTD a.k.a. succesfully connected to irc and registered
 def hndl_376(msg, parsedmsg):
     global st
+    global conf
     st['bot']['registered'] = True
     irc_setumode( parsedmsg[2], "+iwg")
+
+    # join DM channel
+    if conf['CHANKEY'] != "null":
+        write_sock(str.format("JOIN %s %s\r\n" % (conf['IRCCHAN'], conf['CHANKEY']) ) )
+    else:
+        write_sock(str.format("JOIN %s\r\n" % conf['IRCCHAN']))
 
     # attempt to oper up!
     write_sock(str.format("OPER %s %s\r\n" % (conf['OPERNICK'], conf['OPERPASS']) ) )
@@ -110,6 +132,10 @@ def hndl_381(msg, parsedmsg):
     global st
     st['bot']['opered'] = True
     irc_setumode( parsedmsg[2], "+CZbdfiklnorsuwxyz")
+
+    # build client hash
+    write_sock("ETRACE -full\r\n")
+
     return True
 
 # there was a quit message but we didn't issue a QUIT command to the server
@@ -124,11 +150,51 @@ def hndl_381(msg, parsedmsg):
 #         #
 #     return True
 
+# parse ETRACE response into client_hash
+def hndl_708(msg, parsedmsg):
+    global client_dict
+    global st
+    if len(parsedmsg) < 11:
+        return False
+    # target = parsedmsg[2]
+    # usertype = parsedmsg[3]
+    # userclass = parsedmsg[4]
+    # nick = parsedmsg[5]
+    # username = parsedmsg[6]
+    # hostname = parsedmsg[7]
+    # ip = parsedmsg[8]
+    # gecos = msg[msg.rfind(':')+1:]
+    # searchstr = nick + '!' + username + '@' + hostname + '#' + gecos
+
+    if st['bot']['debug_mode']:
+        print("searchstr: " + parsedmsg[5] + '!' + parsedmsg[6] + '@' + parsedmsg[7] + '#' + msg[msg.rfind(':')+1:], file=sys.stderr)
+
+    aclient = {
+        'type' : parsedmsg[3],
+        'userclass' : parsedmsg[4],
+        'username' : parsedmsg[6],
+        'hostname' : parsedmsg[7],
+        'ip' : parsedmsg[8],
+        'gecos' : msg[msg.rfind(':')+1:],
+        'searchstr' : parsedmsg[5] + '!' + parsedmsg[6] + '@' + parsedmsg[7] + '#' + msg[msg.rfind(':')+1:]
+    }
+
+    if parsedmsg[5] not in client_dict:
+        client_dict[parsedmsg[5]] = aclient
+
+    return True
+
+# end of ETRACE
+def hndl_262(msg, parsedmsg):
+    global client_dict
+    irc_privmsg(conf['IRCCHAN'],str.format('-> got %d clients hashed.' % len(client_dict)) )
+    return True
+
 def hndl_pong(msg, parsedmsg):
     global st
     t = time.time()
     st['socket']['lag'] = (t - st['socket']['lastping'])
-
+    return True
 
 def hndl_error(msg, parsedmsg):
     global st
@@ -164,8 +230,13 @@ def cmd_raw(msg, parsedmsg):
     return True
 
 def cmd_etrace(msg, parsedmsg):
-    sender, x, target, cmd, cmdargs = msg.split(maxsplit=4)
-    write_sock(str.format("ETRACE %s\r\n" % cmdargs))
+    sender, x, target, cmd = msg.split(maxsplit=3)
+    c = cmd.split()
+    if len(c) == 2:
+        cmdargs = c[1]
+        write_sock(str.format("ETRACE %s\r\n" % cmdargs))
+    else:
+        write_sock(str.format("ETRACE\r\n"))
     return True
 
 def cmd_lag(msg, parsedmsg):
@@ -174,6 +245,28 @@ def cmd_lag(msg, parsedmsg):
     #sender_nick = sender[1:sender.find('!')]
     msg = str.format("lag: %d seconds\r\n" % st['socket']['lag'])
     irc_privmsg( sender_nick, msg )
+    return True
+
+def cmd_rsearch(msg, parsedmsg):
+    global st
+    global client_dict
+    sender, x, target, cmd = msg.split(maxsplit=3)
+    sender = get_sender(msg)
+
+    c = cmd.split()
+    if len(c) == 2:
+        cmdargs = c[1]
+    else:
+        return False
+
+    try:
+        srch = re.compile(cmdargs)
+    except:
+        irc_privmsg()
+    for k in client_dict.keys():
+        m = re.match(srch, client_dict[k]['searchstr'])
+        if m:
+            irc_privmsg(sender, str.format('client matched -> %s' % client_dict[k]['searchstr']))
     return True
 
 # dispatch code
@@ -186,6 +279,7 @@ def irc_dispatch(rawmsg):
         print("-> %s" % rawmsg.rstrip('\n'), file=sys.stderr)
 
     global handler_dict
+    rawmsg = strip_colors(rawmsg)
     parsedmsg = rawmsg.split()
 
     for i in range( len( parsedmsg ) ):
@@ -234,6 +328,93 @@ def cmd_dispatch(rawmsg):
 
     return True
 
+# handle various notices
+def notice_dispatch(msg, parsedmsg):
+    global conf
+    global st
+
+    # update client_dict for nick changes
+    if len(parsedmsg) > 7 and parsedmsg[6] == 'Nick' and parsedmsg[7] == 'change:':
+        fromnick = parsedmsg[9]
+        tonick = parsedmsg[11]
+        hndl_nickchange(fromnick, tonick)
+        return True
+    # update client_dict for new client connect
+    elif len(parsedmsg) > 7 and parsedmsg[6] == 'CLICONN':
+        nick = parsedmsg[7]
+        return hndl_cliconn(nick, msg, parsedmsg)
+    # update client_dict for client exit
+    elif len(parsedmsg) > 7 and parsedmsg[6] == 'CLIEXIT':
+        nick = parsedmsg[7]
+        return hndl_cliexit(nick)
+    # update client_dict for user opering up
+    elif len(parsedmsg) > 11 and parsedmsg[11] == 'operator':
+        nick = parsedmsg[6]
+        return hndl_user2oper(nick)
+    else:
+        return True
+    return True
+
+def hndl_nickchange(fromnick, tonick):
+    global st
+    global client_dict
+    if not fromnick in client_dict:
+        if st['bot']['debug_mode']:
+            irc_privmsg(conf['IRCCHAN'], str.format('Detected nick change but I don\'t have a record for \0x2%s\x02' % fromnick))
+            return
+    else:
+        if st['bot']['debug_mode']:
+            irc_privmsg(conf['IRCCHAN'], str.format('Detected nick change: \x02%s -> %s\x02 - Updating client hash...' % (fromnick, tonick)))
+        oldrec = client_dict[fromnick]
+        oldrec['searchstr'] = tonick + '!' + oldrec['username'] + '@' + oldrec['hostname'] + '#' + oldrec['gecos']
+        client_dict[tonick] = oldrec
+        del client_dict[fromnick]
+    return True
+
+# currently assumes ratbox umode +C
+def hndl_cliconn(nick, msg, parsedmsg):
+    global client_dict
+    global st
+
+    if st['bot']['debug_mode']:
+        print("CLICONN: %s" % nick, file=sys.stderr)
+
+#-> :irc.logick.net NOTICE * :*** Notice -- CLICONN esp_ esp pop.pop.ret 255.255.255.255 opers <hidden> <hidden> 0 this is a realname.
+    pmsg = msg.split(maxsplit=15)
+    if not nick in client_dict:
+        aclient = {
+            'type' : 'User',
+            'userclass' : parsedmsg[11],
+            'username' : parsedmsg[8],
+            'hostname' : parsedmsg[9],
+            'ip' : parsedmsg[10],
+            'gecos' : pmsg[-1],
+            'searchstr' : parsedmsg[7] + '!' + parsedmsg[8] + '@' + parsedmsg[9] + '#' + pmsg[-1]
+        }
+
+        client_dict[nick] = aclient
+        return True
+    else:
+        return False
+
+    return True
+
+def hndl_cliexit(nick):
+    global client_dict
+    if nick in client_dict:
+        del client_dict[nick]
+    else:
+        return False
+    return True
+
+def hndl_user2oper(nick):
+    global client_dict
+    if nick in client_dict:
+        client_dict[nick]['type'] = 'Oper'
+    else:
+        return False
+    return True
+
 # add a handler to the function list for a given irc message
 def add_irc_handler(bucket, trigger, func):
     global handler_dict
@@ -274,20 +455,23 @@ def init(config, state, debug_mode=False):
 
     st['bot']['debug_mode'] = debug_mode
 
-
+    # server notices
     add_irc_handler(0,'PING', hndl_serverping)
     add_irc_handler(0, 'PONG', hndl_pong)
-    add_irc_handler(0, 'NOTICE', generic_notice)
+    add_irc_handler(1, 'NOTICE', notice_dispatch)
     add_irc_handler(0, 'ERROR', hndl_error)
+    add_irc_handler(1, 'PRIVMSG', cmd_check)
 
     # numerics
     add_irc_handler(1,'376', hndl_376)
     add_irc_handler(1, '381', hndl_381)
-    add_irc_handler(1, 'PRIVMSG', cmd_check)
+    add_irc_handler(1, '708', hndl_708)
+    add_irc_handler(1, '262', hndl_262)
 
     # cmd dispatch
     add_cmd_handler(".die", cmd_die)
     add_cmd_handler(".raw", cmd_raw)
     add_cmd_handler(".etrace", cmd_etrace)
     add_cmd_handler(".lag", cmd_lag)
+    add_cmd_handler(".rsearch", cmd_rsearch)
     return True

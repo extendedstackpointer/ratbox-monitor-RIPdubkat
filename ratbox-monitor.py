@@ -85,7 +85,7 @@ def writer( st ):
 
         # check server connectivity and latency every 10 seconds
         t = time.time()
-        if ((state['socket']['lastping']) == -1 or (t - state['socket']['lastping']) >= 10) and state['socket']['connected']:
+        if ((state['socket']['lastping']) == -1 or (t - state['socket']['lastping']) >= 300) and state['socket']['connected']:
             try:
                 state['socket']['socket'].send(bytes(str.format("PING :%d\r\n" % t), 'utf-8'))
                 state['socket']['lastping'] = t
