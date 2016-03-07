@@ -6,6 +6,7 @@ Here are a few of the planned features and design goals:
 * event/handler driven code framework
 * multiprocess support
 * multiple platform support
+* SSL support
 * asynchronous queue-based I/O for: socket writes, DNSBL lookups, bans, and maybe more...
 * JSON configuration and long-term data storage
 * DNSBL support
