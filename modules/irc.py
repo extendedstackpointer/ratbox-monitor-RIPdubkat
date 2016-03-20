@@ -62,9 +62,10 @@ def write_sock(strfmsg):
 
 
 # send a CTCP response
-def ctcp_reply(target, cmd, data):
-    write_sock(str.format("PRIVMSG %s :\x01%s\x01 %s") % (target, cmd, data))
+def ctcp_reply(target, cmd):
+    write_sock(str.format("PRIVMSG %s :\x01%s\x01\r\n") % (target, cmd) )
     return True
+
 
 
 # send a privmsg
@@ -115,7 +116,7 @@ def hndl_376(msg, parsedmsg):
     global st
     global conf
     st['bot']['registered'] = True
-    irc_setumode( parsedmsg[2], "+iwg")
+    irc_setumode( parsedmsg[2], "+iw")
 
     # join DM channel
     if conf['CHANKEY'] != "null":
@@ -378,6 +379,8 @@ def hndl_cliconn(nick, msg, parsedmsg):
 
     if st['bot']['debug_mode']:
         print("CLICONN: %s" % nick, file=sys.stderr)
+
+    ctcp_reply(nick, "VERSION")
 
 #-> :irc.logick.net NOTICE * :*** Notice -- CLICONN esp_ esp pop.pop.ret 255.255.255.255 opers <hidden> <hidden> 0 this is a realname.
     pmsg = msg.split(maxsplit=15)
