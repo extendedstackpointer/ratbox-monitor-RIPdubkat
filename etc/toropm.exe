@@ -1,0 +1,35 @@
+#!/path/to/toropm.py
+
+# example config file for TORopm
+
+# irc server config
+server = irc.example.com
+port = 6667
+nick = slicknick
+oper = bopm
+pass = somepassword
+
+channels = #your_bopm_monitor_channel
+
+# tor list, DO_NOT_MODIFY_THIS
+torlist = https://check.torproject.org/cgi-bin/TorBulkExitList.py?ip=
+
+# we want to ensure no exit node escapes. generate the following list with the command below.
+# assuming your IRC network as a round robin...
+# dig +short irc.efnet.org | sort -n > network.list
+serverlist = /path/to/etc/network.list
+
+# a database is used to store our state. It will be created the first time
+# your program is run.
+database = /path/to/dat/onion.db
+
+# delay in hours to refetch the list
+# every 2 hours we have set here.
+# DO NOT HAMMER THE TOR WEBSITE, LEST WE ALL GET BANNED!
+fetch_delay = 2
+
+# how long do we set klines for, which will also be expired from our state.
+# 10080 is 7 days
+expire_time = 10080
+
+action_string = KLINE %expire_time% *@%ip% on * :TOR exit nodes are prohibited.
